@@ -9,19 +9,34 @@
  */
 
 const express = require('express');
+const fs = require('fs');
 const path = require('path');
 const nodemailer = require('nodemailer');
-const { getD1Binding } = require('./src/d1-node-binding');
+
+function requireProjectModule(modName) {
+  const candidates = [
+    path.join(__dirname, 'src', modName),
+    path.join(__dirname, modName)
+  ];
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) || fs.existsSync(`${candidate}.js`)) {
+      return require(candidate);
+    }
+  }
+  return require(`./src/${modName}`);
+}
+
+const { getD1Binding } = requireProjectModule('d1-node-binding');
 const {
   ensureD1SchemaAndBootstrap,
   loadStateFromD1,
   buildSnapshotMap,
   commitStateToD1
-} = require('./src/d1-repository');
+} = requireProjectModule('d1-repository');
 const {
   handleApiRequest,
   createSessionContext
-} = require('./src/b5-engine');
+} = requireProjectModule('b5-engine');
 
 const app = express();
 
@@ -63,7 +78,12 @@ app.use((req, res, next) => {
     p === '/db.json' ||
     p.endsWith('/db.json') ||
     p.endsWith('.sqlite') ||
+    p.endsWith('.d1.json') ||
     p === '/server.js' ||
+    p === '/worker.js' ||
+    p === '/b5-engine.js' ||
+    p === '/d1-repository.js' ||
+    p === '/d1-node-binding.js' ||
     p === '/package.json' ||
     p === '/package-lock.json' ||
     p === '/wrangler.toml' ||
@@ -79,18 +99,26 @@ app.use((req, res, next) => {
   next();
 });
 
+function sendPortalFile(res, fileName) {
+  const rootCandidate = path.join(__dirname, fileName);
+  if (fs.existsSync(rootCandidate)) {
+    return res.sendFile(rootCandidate);
+  }
+  return res.sendFile(path.join(__dirname, 'public', fileName));
+}
+
 // Static portal HTML routes (Emerald Sovereign UI preserved)
-app.get('/', (req, res) => res.sendFile(path.join(__dirname, 'member.html')));
-app.get('/member.html', (req, res) => res.sendFile(path.join(__dirname, 'member.html')));
-app.get('/user/login', (req, res) => res.sendFile(path.join(__dirname, 'login.html')));
-app.get('/user/dashboard', (req, res) => res.sendFile(path.join(__dirname, 'member.html')));
-app.get('/admin.html', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
-app.get('/admin/login', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
-app.get('/admin', (req, res) => res.sendFile(path.join(__dirname, 'admin.html')));
-app.get('/login.html', (req, res) => res.sendFile(path.join(__dirname, 'login.html')));
-app.get('/leveltrack-admin.html', (req, res) => res.sendFile(path.join(__dirname, 'leveltrack-admin.html')));
-app.get('/leveltrack-member.html', (req, res) => res.sendFile(path.join(__dirname, 'leveltrack-member.html')));
-app.get('/mobile-preview', (req, res) => res.sendFile(path.join(__dirname, 'mobile-preview.html')));
+app.get('/', (req, res) => sendPortalFile(res, 'member.html'));
+app.get('/member.html', (req, res) => sendPortalFile(res, 'member.html'));
+app.get('/user/login', (req, res) => sendPortalFile(res, 'login.html'));
+app.get('/user/dashboard', (req, res) => sendPortalFile(res, 'member.html'));
+app.get('/admin.html', (req, res) => sendPortalFile(res, 'admin.html'));
+app.get('/admin/login', (req, res) => sendPortalFile(res, 'admin.html'));
+app.get('/admin', (req, res) => sendPortalFile(res, 'admin.html'));
+app.get('/login.html', (req, res) => sendPortalFile(res, 'login.html'));
+app.get('/leveltrack-admin.html', (req, res) => sendPortalFile(res, 'leveltrack-admin.html'));
+app.get('/leveltrack-member.html', (req, res) => sendPortalFile(res, 'leveltrack-member.html'));
+app.get('/mobile-preview', (req, res) => sendPortalFile(res, 'mobile-preview.html'));
 
 let d1DatabaseBinding = null;
 let d1ConnectionMode = 'uninitialized';
@@ -131,8 +159,11 @@ app.use('/api', async (req, res) => {
   }
 });
 
-// Static assets (CSS, logos, videos)
+// Static assets (CSS, logos, videos) from root or ./public
 app.use(express.static(__dirname));
+if (fs.existsSync(path.join(__dirname, 'public'))) {
+  app.use(express.static(path.join(__dirname, 'public')));
+}
 
 const PORT = process.env.PORT || 10000;
 
