@@ -13,9 +13,27 @@
  */
 
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 const DEFAULT_D1_DATABASE_ID = '66c93b0f-274f-44df-82f0-b310c7c2acdf';
+
+function resolveWritablePersistDir(preferredDir) {
+  const candidates = [
+    preferredDir,
+    path.join(os.tmpdir(), 'b5-level-tracking-d1')
+  ].filter(Boolean);
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const probe = path.join(dir, `.write-probe-${process.pid}`);
+      fs.writeFileSync(probe, 'ok', 'utf8');
+      fs.unlinkSync(probe);
+      return dir;
+    } catch (_) {}
+  }
+  return preferredDir;
+}
 
 function findMiniflareModule() {
   if (String(process.env.B5_FORCE_PORTABLE_D1 || '') === '1') {
@@ -151,8 +169,11 @@ function createRemoteCloudflareD1Binding({ accountId, apiToken, databaseId }) {
  * Implements the exact relational tables, primary keys, and queries used by `src/d1-repository.js`.
  */
 function createPortableNodeD1Binding(persistDir) {
-  fs.mkdirSync(persistDir, { recursive: true });
-  const dbFile = path.join(persistDir, 'b5-level-tracking.d1.json');
+  const safePersistDir = resolveWritablePersistDir(persistDir);
+  try {
+    fs.mkdirSync(safePersistDir, { recursive: true });
+  } catch (_) {}
+  const dbFile = path.join(safePersistDir, 'b5-level-tracking.d1.json');
 
   const TABLE_PK = {
     system_settings: ['key'],
@@ -231,9 +252,11 @@ function createPortableNodeD1Binding(persistDir) {
   }
 
   function flushToDisk() {
-    const tmp = `${dbFile}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(store), 'utf8');
-    fs.renameSync(tmp, dbFile);
+    try {
+      const tmp = `${dbFile}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(store), 'utf8');
+      fs.renameSync(tmp, dbFile);
+    } catch (_) {}
   }
 
   function parseInsertValues(valExpr, params) {
@@ -445,11 +468,15 @@ async function getD1Binding(options = {}) {
     return _activeD1;
   }
 
-  const rootDir = path.resolve(__dirname, fs.existsSync(path.join(__dirname, 'wrangler.toml')) ? '.' : '..');
-  const persistDir = options.persistDir || process.env.D1_PERSIST_DIR || path.join(rootDir, '.wrangler', 'state', 'v3', 'd1');
+  const dirBase = path.basename(__dirname).toLowerCase();
+  const rootDir = dirBase === 'src' ? path.dirname(__dirname) : __dirname;
+  const preferredPersistDir = options.persistDir || process.env.D1_PERSIST_DIR || path.join(rootDir, '.wrangler', 'state', 'v3', 'd1');
+  const persistDir = resolveWritablePersistDir(preferredPersistDir);
   const localDbId = options.localDatabaseId || process.env.CLOUDFLARE_D1_DATABASE_ID || DEFAULT_D1_DATABASE_ID;
 
-  fs.mkdirSync(persistDir, { recursive: true });
+  try {
+    fs.mkdirSync(persistDir, { recursive: true });
+  } catch (_) {}
 
   const mfModule = findMiniflareModule();
   if (mfModule && mfModule.Miniflare) {
